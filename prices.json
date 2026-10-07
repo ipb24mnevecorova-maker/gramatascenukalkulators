@@ -1,0 +1,28 @@
+{
+    "vat_percent": 21,
+    "price_per_page": {
+        "blackandwhite": 0.013,
+        "color": 0.05
+    },
+    "format_factor": {
+        "a5": 1,
+        "pocket": 0.7,
+        "a4": 1.8
+    },
+    "cover_price": {
+        "softcover": 0.75,
+        "hardcover": 2.65
+    },
+    "finish_price": {
+        "none": 0.12,
+        "matte": 0.35,
+        "gloss": 0.35,
+        "uv": 0.6
+    },
+    "binding_price": {
+        "glued": 1.6,
+        "sewn_glued": 2.4,
+        "saddle": 0.3,
+        "spiral": 1.2
+    }
+}
