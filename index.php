@@ -1,115 +1,84 @@
 <?php
-session_start();
 require __DIR__ . '/calculator.php';
 
-$is_admin = !empty($_SESSION['admin']);
-
-function e(string $s): string { return htmlspecialchars($s, ENT_QUOTES, 'UTF-8'); }
 function sel(string $field, string $value, string $default = ''): string {
     return (($_POST[$field] ?? $default) === $value) ? ' selected' : '';
 }
 function val(string $field, string $default = ''): string { return e($_POST[$field] ?? $default); }
-function money(float $x): string { return number_format($x, 2, ',', ' ') . ' €'; }
-function cell(array $prices, bool $from_post, string $group, string $key): string
-{
-    if ($from_post) {
-        $raw = $_POST[$group][$key] ?? '';
-        return e(is_string($raw) ? $raw : '');
-    }
-    return e(plain_number($prices[$group][$key]));
-}
 
 $errors = [];
-$price_errors = [];
 $result = null;
-$message = '';
-$posted_prices = false;
-
-$saved_prices = load_prices();
-$prices = $saved_prices;
+$prices = load_prices();
+$settings = load_settings();
+$customer = ['name' => '', 'email' => '', 'phone' => ''];
 $action = $_SERVER['REQUEST_METHOD'] === 'POST' ? ($_POST['action'] ?? 'calculate') : '';
 
-if (!$is_admin) {
-    if ($action !== '') {
-        $outcome = calculate_book_price($_POST, $saved_prices);
-        $errors  = $outcome['errors'];
-        $result  = $outcome['result'];
-    }
-} else {
-    if ($action === 'calculate') {
-        $_POST = fill_blank_prices($_POST, $saved_prices);
-    }
+if ($action !== '') {
+    ['customer' => $customer, 'errors' => $customer_errors] = parse_customer($_POST);
 
-    if ($action === 'reset') {
-        if (reset_prices()) {
-            $message = 'Cenas atjaunotas uz sākotnējām.';
+    $outcome = calculate_book_price($_POST, $prices);
+    $errors  = $outcome['errors'];
+    $result  = $outcome['result'];
+
+    if ($action === 'save_tame' && $result) {
+        if ($customer_errors) {
+            $errors = $customer_errors;
         } else {
-            $errors[] = 'Neizdevās atjaunot cenas.';
-        }
-        $saved_prices = $prices = load_prices();
-        $result = calculate_book_price($_POST, $prices)['result'];
-    } elseif ($action === 'calculate' || $action === 'save_prices') {
-        $posted_prices = true;
-        ['prices' => $form_prices, 'errors' => $price_errors] = parse_prices_form($_POST);
-
-        if ($price_errors) {
-            $errors = $price_errors;
-        } else {
-            $prices = $form_prices;
-
-            if ($action === 'save_prices') {
-                if (save_prices($prices)) {
-                    $saved_prices = $prices;
-                    $message = 'Cenas saglabātas.';
-                } else {
-                    $errors[] = 'Neizdevās saglabāt failu prices.json. Pārbaudi, vai mape ir rakstāma.';
-                }
+            $id = save_tame($result, tame_meta($settings, $customer));
+            if ($id !== null) {
+                header('Location: tame.php?id=' . rawurlencode($id) . '&saved=1');
+                exit;
             }
-
-            $outcome = calculate_book_price($_POST, $prices);
-            if ($action === 'calculate') {
-                $errors = array_merge($errors, $outcome['errors']);
-            }
-            $result = $outcome['result'];
+            $errors[] = 'Neizdevās saglabāt tāmi. Pārbaudi, vai mape ir rakstāma.';
         }
     }
 }
 
-$unsaved = $posted_prices && !$price_errors && $prices != $saved_prices;
-$prices_open = true;
-
-if ($posted_prices) {
-    $vat_value = is_string($_POST['vat_percent'] ?? null) ? $_POST['vat_percent'] : '';
-} else {
-    $vat_value = plain_number($prices['vat_percent']);
-}
+$tame_meta = $result ? tame_meta($settings, $customer) : null;
 ?>
 <!DOCTYPE html>
 <html lang="lv">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
     <title>Grāmatu cenu kalkulators</title>
     <link rel="stylesheet" href="css/style.css?v=<?= filemtime(__DIR__ . '/css/style.css') ?>">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-<script src="js/script.js?v=<?= filemtime(__DIR__ . '/js/script.js') ?>" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="js/script.js?v=<?= filemtime(__DIR__ . '/js/script.js') ?>" defer></script>
 </head>
 <body>
 <main>
     <div class="admin-bar">
-        <?php if ($is_admin): ?>
-            <span>Admin režīms</span>
-            <a href="logout.php" class="button">Iziet</a>
-        <?php else: ?>
-            <a href="login.php" class="button">Admin</a>
-        <?php endif; ?>
+        <a href="tames.php" class="button">Saglabātās tāmes</a>
+        <a href="login.php" class="button">Admin</a>
     </div>
 
     <h1>Grāmatu cenu kalkulators</h1>
 
     <form action="index.php#rezultats" method="post">
 
+
         <fieldset>
+            <legend>Pasūtītāja informācija</legend>
+
+            <div class="field">
+                <label for="customer_name">Vārds, uzvārds / uzņēmums</label>
+                <input type="text" id="customer_name" name="customer_name" required value="<?= val('customer_name') ?>">
+            </div>
+
+            <div class="field">
+                <label for="customer_email">E-pasts</label>
+                <input type="email" id="customer_email" name="customer_email" required value="<?= val('customer_email') ?>">
+            </div>
+
+            <div class="field">
+                <label for="customer_phone">Telefons</label>
+                <input type="tel" id="customer_phone" name="customer_phone" required value="<?= val('customer_phone') ?>">
+            </div>
+        </fieldset>        
+        <fieldset>
+            
             <legend>Grāmata</legend>
 
             <div class="field">
@@ -182,11 +151,7 @@ if ($posted_prices) {
             </div>
         </fieldset>
 
-        <fieldset>
-            <legend>Citi parametri</legend>
-            <textarea id="other_params" name="other_params" rows="3" maxlength="500"
-                placeholder="Piemēram, īpašs papīrs, termiņš... (nav obligāti)"><?= val('other_params') ?></textarea>
-        </fieldset>
+
 
         <input type="hidden" name="tame_number" value="<?= e($result['tame_number'] ?? (is_string($_POST['tame_number'] ?? null) ? $_POST['tame_number'] : '')) ?>">
 
@@ -194,23 +159,18 @@ if ($posted_prices) {
             <button type="submit" name="action" value="calculate" class="primary">
                 <?= $result ? 'Pārrēķināt' : 'Aprēķināt' ?>
             </button>
+            <?php if ($result): ?>
+                <a href="index.php" class="button">Jauna tāme</a>
+            <?php endif; ?>
         </p>
 
         <div id="rezultats">
-            <?php if ($message): ?>
-                <p class="msg-ok"><?= e($message) ?></p>
-            <?php endif; ?>
-
             <?php if ($errors): ?>
                 <ul class="msg-err">
                     <?php foreach ($errors as $err): ?>
                         <li><?= e($err) ?></li>
                     <?php endforeach; ?>
                 </ul>
-            <?php endif; ?>
-
-            <?php if ($unsaved): ?>
-                <p class="msg-warn">Aprēķinā izmantotas nesaglabātas cenas. Nospied «Saglabāt cenas», lai tās paturētu.</p>
             <?php endif; ?>
 
             <?php if ($result): ?>
@@ -266,127 +226,20 @@ if ($posted_prices) {
                         </tbody>
                     </table>
 
-
                 <p style="margin-top: 16px;">
                     <button type="button" id="toggleBtn" class="primary">Skatīt tāmi</button>
+                    <button type="submit" name="action" value="save_tame">Saglabāt tāmi</button>
                 </p>
 
                 <div id="tameWrap" hidden>
-                <div id="tameContainer" style="background: #ffffff; padding: 20px; border-radius: 8px;">
-                    <h2>Grāmatas tipogrāfijas tāme</h2>
+                    <?php include __DIR__ . '/tame_partial.php'; ?>
 
-                    <ul style="list-style: none; padding-left: 0;">
-                        <li>Izdevniecība "Iedvesmas Grāmata"</li>
-                        <li>Datums: <?= date('Y-m-d') ?></li>
-                        <li>Tāmes numurs: <strong><?= e($result['tame_number']) ?></strong></li>
-                        <?php foreach ($result['specs'] as $label => $value): ?>
-                            <li style="margin-bottom: 4px;"><?= e($label) ?>: <strong><?= e($value) ?></strong></li>
-                        <?php endforeach; ?>
-                    </ul>
-
-                    <table class="result">
-                        <thead>
-                            <tr>
-                                <th>Pozīcija</th>
-                                <th class="num">1 eksemplārs</th>
-                                <th class="num">Tirāža (<?= $c ?> eks.)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>
-                                    Iekšlapas<br>
-                                    <small><?= $result['pages'] ?> lpp × <?= number_format($result['page_price'], 3, ',', ' ') ?> € × <?= number_format($result['factor'], 2, ',', ' ') ?> (formāta koeficients)</small>
-                                </td>
-                                <td class="num"><?= money($result['inside']) ?></td>
-                                <td class="num"><?= money($result['inside'] * $c) ?></td>
-                            </tr>
-                            <tr>
-                                <td>Vāks</td>
-                                <td class="num"><?= money($result['cover']) ?></td>
-                                <td class="num"><?= money($result['cover'] * $c) ?></td>
-                            </tr>
-                            <tr>
-                                <td>Vāka apdare</td>
-                                <td class="num"><?= money($result['finish']) ?></td>
-                                <td class="num"><?= money($result['finish'] * $c) ?></td>
-                            </tr>
-                            <tr>
-                                <td>Iesiešana</td>
-                                <td class="num"><?= money($result['binding']) ?></td>
-                                <td class="num"><?= money($result['binding'] * $c) ?></td>
-                            </tr>
-                            <tr class="sum">
-                                <td>Cena bez PVN</td>
-                                <td class="num"><?= money($result['per_copy']) ?></td>
-                                <td class="num"><?= money($result['total']) ?></td>
-                            </tr>
-                            <tr>
-                                <td>PVN <?= number_format($result['vat_percent'], 1, ',', ' ') ?>%</td>
-                                <td class="num"><?= money($result['per_copy_vat_amount']) ?></td>
-                                <td class="num"><?= money($result['vat_amount']) ?></td>
-                            </tr>
-                            <tr class="final">
-                                <td>Cena ar PVN</td>
-                                <td class="num"><?= money($result['per_copy_vat']) ?></td>
-                                <td class="num"><?= money($result['total_vat']) ?></td>
-                            </tr>
-                        </tbody>
-                    </table>
-
-                </div>
-
-                <p style="margin-top: 16px;">
-                    <button type="button" id="downloadPdfBtn" class="primary" onclick="downloadTamePdf('<?= e($result['tame_number']) ?>')">Lejupielādēt PDF</button>
-                </p>
+                    <p style="margin-top: 16px;">
+                        <button type="button" id="downloadPdfBtn" class="primary" onclick="downloadTamePdf('<?= e($result['tame_number']) ?>')">Lejupielādēt PDF</button>
+                    </p>
                 </div>
             <?php endif; ?>
         </div>
-
-        <?php if ($is_admin): ?>
-        <details class="prices"<?= $prices_open ? ' open' : '' ?>>
-            <summary><strong>Cenas (var mainīt)</strong></summary>
-
-            <p><small>Maini cenas un nospied «Skatīt tāmi», lai redzētu jauno rezultātu. «Saglabāt cenas» paturēs tās nākamajām reizēm.</small></p>
-
-            <div class="price-grid">
-                <?php foreach (PRICE_GROUPS as $group => $info): ?>
-                    <div>
-                        <h3><?= e($info['title']) ?></h3>
-                        <table>
-                            <?php foreach ($info['labels'] as $key => $label): ?>
-                                <tr>
-                                    <td><label for="<?= e($group . '_' . $key) ?>"><?= e($label) ?></label></td>
-                                    <td>
-                                        <input type="text" inputmode="decimal"
-                                            id="<?= e($group . '_' . $key) ?>"
-                                            name="<?= e($group) ?>[<?= e($key) ?>]"
-                                            value="<?= cell($prices, $posted_prices, $group, $key) ?>">
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </table>
-                    </div>
-                <?php endforeach; ?>
-
-                <div>
-                    <h3>PVN</h3>
-                    <table>
-                        <tr>
-                            <td><label for="vat_percent">PVN likme (%)</label></td>
-                            <td><input type="text" inputmode="decimal" id="vat_percent" name="vat_percent" value="<?= e($vat_value) ?>"></td>
-                        </tr>
-                    </table>
-                </div>
-            </div>
-
-            <p>
-                <button type="submit" name="action" value="save_prices" formnovalidate>Saglabāt cenas</button>
-                <button type="submit" name="action" value="reset" formnovalidate
-                    onclick="return confirm('Atjaunot visas cenas uz sākotnējām?');">Atjaunot sākotnējās cenas</button>
-            </p>
-        </details>
-        <?php endif; ?>
     </form>
 </main>
 </body>
