@@ -1,5 +1,7 @@
 function toggleInput() {
-    const isCustom = document.getElementById('book_format').value === 'custom';
+    const select = document.getElementById('book_format');
+    if (!select) return;   // page without the calculator form (tame.php)
+    const isCustom = select.value === 'custom';
 
     document.getElementById('extraField').hidden = !isCustom;
     document.getElementById('custom_width').required = isCustom;

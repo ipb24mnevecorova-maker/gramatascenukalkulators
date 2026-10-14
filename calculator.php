@@ -2,6 +2,18 @@
 
 const PRICES_FILE = __DIR__ . '/prices.json';
 const COUNTER_FILE = __DIR__ . '/counter.json';
+const SETTINGS_FILE = __DIR__ . '/settings.json';
+const TAMES_DIR = __DIR__ . '/tames';
+
+function e(string $s): string
+{
+    return htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
+}
+
+function money(float $x): string
+{
+    return number_format($x, 2, ',', ' ') . ' €';
+}
 
 const LABELS = [
     'format' => [
@@ -282,4 +294,210 @@ function calculate_book_price(array $input, ?array $prices = null): array
             'total_vat' => $total_vat,
         ],
     ];
+}
+
+// ---------------------------------------------------------------------------
+// Admin settings: offer validity date and notes shown on every tāme
+// ---------------------------------------------------------------------------
+
+function default_settings(): array
+{
+    return ['valid_until' => (new DateTime())->modify('+30 days')->format('Y-m-d'), 'notes' => ''];
+}
+
+function load_settings(): array
+{
+    $settings = default_settings();
+    if (!is_file(SETTINGS_FILE)) {
+        return $settings;
+    }
+
+    $saved = json_decode((string) file_get_contents(SETTINGS_FILE), true);
+    if (!is_array($saved)) {
+        return $settings;
+    }
+
+    if (is_string($saved['valid_until'] ?? null) && is_valid_date($saved['valid_until'])) {
+        $settings['valid_until'] = $saved['valid_until'];
+    }
+    if (is_string($saved['notes'] ?? null)) {
+        $settings['notes'] = $saved['notes'];
+    }
+
+    return $settings;
+}
+
+function is_valid_date(string $value): bool
+{
+    $d = DateTime::createFromFormat('!Y-m-d', $value);
+    return $d !== false && $d->format('Y-m-d') === $value;
+}
+
+function parse_settings_form(array $post): array
+{
+    $settings = default_settings();
+    $errors = [];
+
+    $raw_date = is_string($post['valid_until'] ?? null) ? trim($post['valid_until']) : '';
+    if (!is_valid_date($raw_date)) {
+        $errors[] = 'Norādi derīgu cenu piedāvājuma derīguma datumu.';
+    } elseif ($raw_date < date('Y-m-d')) {
+        $errors[] = 'Derīguma datums nevar būt agrāks par šodienu.';
+    } else {
+        $settings['valid_until'] = $raw_date;
+    }
+
+    $notes = is_string($post['notes'] ?? null) ? trim(str_replace("\r\n", "\n", $post['notes'])) : '';
+    if (mb_strlen($notes) > 1000) {
+        $errors[] = 'Piezīmes ir pārāk garas (max 1000 rakstzīmes).';
+    } else {
+        $settings['notes'] = $notes;
+    }
+
+    return ['settings' => $settings, 'errors' => $errors];
+}
+
+function save_settings(array $settings): bool
+{
+    $json = json_encode($settings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    return $json !== false && file_put_contents(SETTINGS_FILE, $json, LOCK_EX) !== false;
+}
+
+// ---------------------------------------------------------------------------
+// Saved tāmes (stored one JSON file per tāme in tames/)
+// ---------------------------------------------------------------------------
+
+function parse_customer(array $post): array
+{
+    $get = fn(string $k): string => is_string($post[$k] ?? null) ? trim($post[$k]) : '';
+    $customer = [
+        'name'  => $get('customer_name'),
+        'email' => $get('customer_email'),
+        'phone' => $get('customer_phone'),
+    ];
+    $errors = [];
+
+    if ($customer['name'] === '' || mb_strlen($customer['name']) > 200) {
+        $errors[] = 'Norādi pasūtītāja vārdu, uzvārdu vai uzņēmumu (līdz 200 rakstzīmēm).';
+    }
+    if (!filter_var($customer['email'], FILTER_VALIDATE_EMAIL) || mb_strlen($customer['email']) > 200) {
+        $errors[] = 'Norādi derīgu e-pasta adresi.';
+    }
+    if ($customer['phone'] === '' || mb_strlen($customer['phone']) > 50) {
+        $errors[] = 'Norādi tālruņa numuru (līdz 50 rakstzīmēm).';
+    }
+
+    return ['customer' => $customer, 'errors' => $errors];
+}
+
+// Date, validity and notes that go onto a tāme.
+function tame_meta(array $settings, ?array $customer = null): array
+{
+    return [
+        'date'        => date('Y-m-d'),
+        'valid_until' => (string) $settings['valid_until'],
+        'notes'       => (string) $settings['notes'],
+        'customer'    => $customer,
+    ];
+}
+
+function tame_path(string $id): ?string
+{
+    return preg_match('/^TM-\d{4}-\d{4}$/', $id) ? TAMES_DIR . '/' . $id . '.json' : null;
+}
+
+/**
+ * Stores a snapshot of the tāme (numbers, customer, validity, notes).
+ * Saved tāmes are never overwritten: if the number is already taken, a new one is issued.
+ * Returns the tāme number, or null on failure.
+ */
+function save_tame(array $result, array $meta): ?string
+{
+    if (!is_dir(TAMES_DIR) && !mkdir(TAMES_DIR, 0775, true) && !is_dir(TAMES_DIR)) {
+        return null;
+    }
+
+    // The folder holds customer contact details, so block direct web access to it.
+    $htaccess = TAMES_DIR . '/.htaccess';
+    if (!is_file($htaccess)) {
+        file_put_contents($htaccess, "Require all denied\n");
+    }
+
+    $id = $result['tame_number'];
+    if (tame_path($id) === null || is_file(tame_path($id))) {
+        $id = generate_tame_number();
+        $result['tame_number'] = $id;
+    }
+    $path = tame_path($id);
+    if ($path === null) {
+        return null;
+    }
+
+    $json = json_encode(
+        ['created' => date('Y-m-d H:i:s'), 'meta' => $meta, 'result' => $result],
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
+    );
+    if ($json === false) {
+        return null;
+    }
+
+    $fh = @fopen($path, 'x');   // 'x' = fail if the file already exists
+    if (!$fh) {
+        return null;
+    }
+    $ok = fwrite($fh, $json) !== false;
+    fclose($fh);
+
+    return $ok ? $id : null;
+}
+
+function load_tame(string $id): ?array
+{
+    $path = tame_path($id);
+    if ($path === null || !is_file($path)) {
+        return null;
+    }
+
+    $record = json_decode((string) file_get_contents($path), true);
+    if (!is_array($record) || !is_array($record['result'] ?? null) || !is_array($record['meta'] ?? null)) {
+        return null;
+    }
+
+    return $record;
+}
+
+// Summary rows of all saved tāmes, newest first. $search matches number, name or e-mail.
+function list_tames(string $search = ''): array
+{
+    $rows = [];
+    foreach (glob(TAMES_DIR . '/TM-*.json') ?: [] as $file) {
+        $record = json_decode((string) file_get_contents($file), true);
+        if (!is_array($record) || !is_array($record['result'] ?? null) || !is_array($record['meta'] ?? null)) {
+            continue;
+        }
+
+        $customer = $record['meta']['customer'] ?? [];
+        $row = [
+            'id'          => (string) ($record['result']['tame_number'] ?? basename($file, '.json')),
+            'created'     => (string) ($record['created'] ?? ''),
+            'valid_until' => (string) ($record['meta']['valid_until'] ?? ''),
+            'name'        => (string) ($customer['name'] ?? ''),
+            'email'       => (string) ($customer['email'] ?? ''),
+            'total_vat'   => (float) ($record['result']['total_vat'] ?? 0),
+        ];
+
+        if ($search !== '' && mb_stripos($row['id'] . ' ' . $row['name'] . ' ' . $row['email'], $search) === false) {
+            continue;
+        }
+        $rows[] = $row;
+    }
+
+    usort($rows, fn($a, $b) => strcmp($b['created'] . $b['id'], $a['created'] . $a['id']));
+    return $rows;
+}
+
+function delete_tame(string $id): bool
+{
+    $path = tame_path($id);
+    return $path !== null && is_file($path) && unlink($path);
 }

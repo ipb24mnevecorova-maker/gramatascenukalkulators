@@ -1,9 +1,8 @@
 <?php
-session_start();
-require 'config.php';
+require __DIR__ . '/auth.php';
 
 if (!empty($_SESSION['admin'])) {
-    header('Location: index.php');
+    header('Location: admin.php');
     exit;
 }
 
@@ -13,15 +12,15 @@ if (empty($_SESSION['csrf'])) {
 
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) {
+    $user = is_string($_POST['username'] ?? null) ? $_POST['username'] : '';
+    $pass = is_string($_POST['password'] ?? null) ? $_POST['password'] : '';
+
+    if (!hash_equals($_SESSION['csrf'], is_string($_POST['csrf'] ?? null) ? $_POST['csrf'] : '')) {
         $error = 'Nederīgs pieprasījums.';
-    } elseif (
-        ($_POST['username'] ?? '') === ADMIN_USER &&
-        password_verify($_POST['password'] ?? '', ADMIN_HASH)
-    ) {
-        session_regenerate_id(true); 
+    } elseif (admin_login_ok($user, $pass)) {
+        session_regenerate_id(true);
         $_SESSION['admin'] = true;
-        header('Location: index.php');
+        header('Location: admin.php');
         exit;
     } else {
         sleep(1);
@@ -34,6 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
     <title>Admin pieslēgšanās</title>
     <link rel="stylesheet" href="css/style.css?v=<?= filemtime(__DIR__ . '/css/style.css') ?>">
 </head>
