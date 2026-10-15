@@ -4,6 +4,7 @@ $tame_customer = $tame_meta['customer'] ?? null;
 $tame_notes = trim((string) ($tame_meta['notes'] ?? ''));
 ?>
 <div id="tameContainer" style="background: #ffffff; padding: 20px; border-radius: 8px;">
+    <img src="img/ig_logo.png" alt="Iedvesmas Grāmata Logo" style="max-width: 100px; margin-bottom: 10px;">
     <h2>Grāmatas tipogrāfijas tāme</h2>
 
     <ul style="list-style: none; padding-left: 0;">
